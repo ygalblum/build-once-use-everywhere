@@ -1,1 +1,75 @@
-= Add your document here
+= Build Once Use Everywhere with OCP, Podman and OSBuild
+Using Podman's ability to handle Kubernetes YAML files, and OSBuild's ability to embed container images we can now build containers and write their corresponding manifests once, test them locally, using Podman, or in the cloud, using OCP, and embed them into the target image
+
+== Application
+For this demo we will use a sample application written by `Alexander Larson` that may be found https://gitlab.com/CentOS/automotive/sample-images/-/tree/main/sample-apps[here]. This application is comprised of two services, engine and radio, interacting using SOME/IP implemented by a third service.
+
+== Building
+The sample application uses two container images
+
+=== Sample application
+The sample application may be built using the instructions provided https://gitlab.com/CentOS/automotive/sample-images/-/blob/main/sample-apps/README.md[here], which also include instructions on how to containerize the application.
+
+As specified in the README file, A pre-built version of these containers for aarch64 and x86-64 is available in the https://gitlab.com/CentOS/automotive/sample-images/container_registry/2944592[automotive sig container repo].
+
+=== VSome/IP service
+A containerized version of the https://github.com/COVESA/vsomeip[VSOME/IP] application may be built using this https://gitlab.com/ygalblum/sample-images/-/blob/ocp_reuse/osbuild-manifests/files/ocp/Containerfile.vsomeip[ContainerFile].
+
+To create and upload a multi-arch OCI container and manifest follow the instructions below:
+[source, bash]
+----
+MANIFEST_NAME=vsomip-manifest
+REGISTRY=< The container registry >
+USER=< Account in the registry >
+IMAGE_NAME=< Name of the project >
+IMAGE_TAG=< Cotnainer Version >
+BUILD_PATH="."
+CONTAINER_FILE=Containerfile.vsomeip
+
+buildah manifest create ${MANIFEST_NAME}
+buildah bud --tag "${REGISTRY}/${USER}/${IMAGE_NAME}:${IMAGE_TAG}" --manifest ${MANIFEST_NAME} --arch amd64 --file ${CONTAINER_FILE} ${BUILD_PATH}
+buildah bud --tag "${REGISTRY}/${USER}/${IMAGE_NAME}:${IMAGE_TAG}" --manifest ${MANIFEST_NAME} --arch arm64 --file ${CONTAINER_FILE} ${BUILD_PATH}
+buildah manifest push --all --format=v2s2 ${MANIFEST_NAME} "docker://${REGISTRY}/${USER}/${IMAGE_NAME}:${IMAGE_TAG}"
+----
+
+Alternatively, A pre-built version of these containers for aarch64 and x86-64 is available https://quay.io/repository/yblum/vsomeip[here].
+
+== Running on OCP
+Assuming you have an OCP (or any Kubernetes cluster), you may deploy the application using these https://gitlab.com/ygalblum/sample-images/-/tree/ocp_reuse/osbuild-manifests/files/ocp[manifests].
+[source, bash]
+----
+oc apply -f namespace.yml
+oc apply -f vsomeip.yml
+oc apply -f engine.yml
+oc apply -f radio.yml
+----
+
+You can monitor the change in the volume of the radio service based on the notification coming from the engine service.
+[source, bash]
+----
+oc get pods -n cow -l app=radio -o jsonpath={.items[0].metadata.name} | xargs oc logs -n cow -f
+----
+
+== Running locally using Podman
+Once you have Podman installed on your machine you can deploy the application using the same https://gitlab.com/ygalblum/sample-images/-/tree/ocp_reuse/osbuild-manifests/files/ocp[manifests]
+[source, bash]
+----
+podman play kube vsomeip.yml
+podman play kube engine.yml
+podman play kube radio.yml
+----
+
+You can monitor the change in the volume of the radio service based on the notification coming from the engine service.
+[source, bash]
+----
+podman logs -f radio-pod-0-radio
+----
+
+== Running in an AutoSD Image
+Follow the build details described https://ygalblum.github.io/soafee-on-autosd-doc/[here] with the exception that now you are building the image `cs9-aws-ocp-regular.aarch64.img`
+
+Once you have an EC2 instance running the generated AMI, SSH to it and check the journal for the radio service logs
+[source, bash]
+----
+journalctl -u radio -f
+----
